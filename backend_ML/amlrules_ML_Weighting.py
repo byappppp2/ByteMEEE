@@ -25,9 +25,9 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 # =========================================================
 # CONFIG
 # =========================================================
-CSV_PATH = "datasets/HI-Medium_Trans.csv"
-FLAGGED_PATH = "datasets/flagged_transactions.csv"
-DF_PATH = "datasets/transactions_scored.csv"
+CSV_PATH = "HI-Medium_Trans.csv"
+FLAGGED_PATH = "flagged_transactions.csv"
+DF_PATH = "transactions_scored.csv"
 
 # Amount thresholds
 HIGH_VALUE = 20_000
@@ -278,21 +278,21 @@ def main():
     df["risk_prob"] = final_model.predict_proba(X)[:, 1]  # probability of laundering
 
 
+    coef = np.array(list(auto_weights.values()))
 
-    # Use quantiles to create severity bins
-    quantiles = df["risk_prob"].quantile([0.25, 0.5, 0.75]).values
+    # Best and worst input patterns
+    x_best = np.array([1 if w < 0 else 0 for w in coef]).reshape(1, -1)   # safest combination
+    x_worst = np.array([1 if w > 0 else 0 for w in coef]).reshape(1, -1)  # riskiest combination
 
-    df["severity"] = pd.cut(
-        df["risk_prob"],
-        bins=[-0.01, *quantiles, 1.01],
-        labels=["Low", "Medium", "Elevated", "High"],
-        duplicates="drop"
-    )
+    # Predict corresponding laundering probabilities
+    p_best = final_model.predict_proba(x_best)[0][1]
+    p_worst = final_model.predict_proba(x_worst)[0][1]
 
-    if len(pd.unique(bins)) < 5:
-        bins = [-0.01, 0.0005, 0.001, 0.005, 1.01]  # fixed small bins
-    df["severity"] = pd.cut(df["risk_prob"], bins=bins, labels=["Low","Medium","Elevated","High"])
+    #build the bins
+    bins = np.linspace(p_best, p_worst, 5)  # creates 5 edges → 4 intervals
+    labels = ["Low", "Medium", "Elevated", "High"]
 
+    df["severity"] = pd.cut(df["risk_prob"], bins=bins, labels=labels, include_lowest=True)
 
 
     step("STEP 5: Save outputs & quick chart")
