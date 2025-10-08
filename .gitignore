@@ -25,3 +25,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+backend_ML/HI-Medium_Trans.csv
+backend_ML/HI-Medium_accounts.csv
+*.csv
