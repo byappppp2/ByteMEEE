@@ -48,10 +48,10 @@ app.add_middleware(
 @app.post("/process")
 async def process_file(file: UploadFile = File(...)):
     # Read the uploaded CSV
-    df = pd.read_csv(file.file)
+    #df = pd.read_csv(file.file)
 
     # Run your fraud detection logic #
-    scanVolume, flaggedRecords, proportionFlagged, topViolations = detect_fraud(df)
+    scanVolume, flaggedRecords, proportionFlagged, topViolations = main(file)
 
     # Return JSON to frontend  # this is the one!!! to put in all the values
     return {
@@ -194,7 +194,7 @@ def validate_file_security(file_path: str) -> bool:
     return True
 
 
-def main():
+def main(FILE):
     t0 = time.time()
 
     # -------------------------
@@ -204,6 +204,7 @@ def main():
 
 
     # Validate file security
+    CSV_PATH = FILE
     if not validate_file_security(CSV_PATH):
         print(f"ERROR: File validation failed for: {CSV_PATH}", file=sys.stderr)
         sys.exit(1)
