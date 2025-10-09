@@ -76,6 +76,27 @@ export default function UploadPage() {
     setError("")
 
     try {
+
+      
+      // Prepare FormData to send file to backend
+      const formData = new FormData()
+      formData.append("file", file)
+
+      // Send to FastAPI endpoint
+      
+      const response = await fetch("http://127.0.0.1:5000/process", {
+        method: "POST",
+        body: formData
+      })
+
+      console.log(response)
+
+      if (!response.ok) {
+        throw new Error("Failed to process file on backend")
+      }
+
+      // const result = await response.json()
+
       const text = await file.text()
       let transactions: Transaction[]
 

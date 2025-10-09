@@ -13,6 +13,11 @@ import time
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+
+
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -25,6 +30,41 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report, precision_recall_curve, roc_curve, roc_auc_score
+
+
+
+#FAST API
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# === FastAPI endpoint ===
+@app.post("/process")
+async def process_file(file: UploadFile = File(...)):
+    # Read the uploaded CSV
+    #df = pd.read_csv(file.file)
+
+    # Run your fraud detection logic #
+    scanVolume, flaggedRecords, proportionFlagged, topViolations = main(file)
+
+    # Return JSON to frontend  # this is the one!!! to put in all the values
+    return {
+        "scanVolume": scanVolume,
+        "flaggedRecords": flaggedRecords,
+        "proportionFlagged": proportionFlagged,
+        "topViolations": topViolations
+    }
+
+# === Run server ===
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=5000, reload=True)
 
 
 # =========================================================
@@ -154,7 +194,7 @@ def validate_file_security(file_path: str) -> bool:
     return True
 
 
-def main():
+def main(FILE):
     t0 = time.time()
 
     # -------------------------
@@ -164,6 +204,7 @@ def main():
 
 
     # Validate file security
+    CSV_PATH = FILE
     if not validate_file_security(CSV_PATH):
         print(f"ERROR: File validation failed for: {CSV_PATH}", file=sys.stderr)
         sys.exit(1)
