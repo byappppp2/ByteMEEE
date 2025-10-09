@@ -1,36 +1,44 @@
-import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-export async function POST(request: Request) {
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
+
+const scanVolume = 250000; // (var)
+const flaggedRecords = 327; // (var)
+const topViolations = [
+  "High-value cross-border transfers",
+  "Structuring (multiple small transactions)",
+  "Odd-hour transactions"
+]; // (var)
+
+export async function POST() {
   try {
-    const body = await request.json();
-    const transactions = body.transactions;
+    const prompt = `
+    You are a compliance analyst. Write a concise fraud detection report for stakeholders.
+    Use bullet points and short paragraphs.
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY is not defined");
+    Details:
+    - Total transactions scanned: ${scanVolume}
+    - Number of flagged records: ${flaggedRecords}
+    - Proportion of flagged records: (calculate automatically)
+    - Detection methods used: Combination of rule-based detection, logistic regression, and random forest.
+    - Top 3 rule violations: ${topViolations.join(", ")}
 
-    const openai = new OpenAI()
+    Please produce a clear, professional report that explains findings and insights.
+    `;
 
-    const response = await openai.responses.create({
+    const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      input: [
-        {
-          role: "system",
-          content: "You are a financial compliance analyst."
-        },
-        {
-          role: "user",
-          content: `Analyze the following transactions:\n${JSON.stringify(transactions, null, 2)}`
-        }
-      ]
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.6,
     });
 
-      const reportText = response.output_text ?? "";
-
-    return NextResponse.json({ report: reportText });
+    return Response.json({
+      report: response.choices[0].message.content,
+    });
   } catch (error) {
     console.error("Error generating report:", error);
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    return Response.json({ error: "Failed to generate report" }, { status: 500 });
   }
 }
-
