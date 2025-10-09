@@ -44,7 +44,7 @@ export default function LoginForm({ onLogin, onSwitchToSignup }: LoginFormProps)
 
       if (data?.user) {
         onLogin(data.user)
-        router.push("/")
+        router.push("/upload")
         return
       }
     } catch (err) {
