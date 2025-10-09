@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useState } from "react"
+import supabase from "@/lib/supabaseClient"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,27 +11,59 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { AlertCircle, ShieldCheck } from "lucide-react"
 
-export default function LoginPage() {
+interface SignupFormProps {
+  onSignup: (user: any) => void
+  onSwitchToLogin: () => void
+}
+
+export default function SignupForm({ onSignup, onSwitchToLogin }: SignupFormProps) {
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [message, setMessage] = useState("")
   const [isLoading, setIsLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError("")
+    setMessage("")
     setIsLoading(true)
 
-    // Simple mock authentication
-    if (email && password) {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 800))
+    // Validate passwords match
+    if (password !== confirmPassword) {
+      setMessage("Passwords do not match")
+      setIsLoading(false)
+      return
+    }
 
-      localStorage.setItem("isAuthenticated", "true")
-      router.push("/")
-    } else {
-      setError("Please enter both email and password")
+    // Validate password length
+    if (password.length < 6) {
+      setMessage("Password must be at least 6 characters long")
+      setIsLoading(false)
+      return
+    }
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email,
+        password: password,
+      })
+
+      if (error) {
+        setMessage(error.message)
+        return
+      }
+
+      if (data?.user) {
+        setMessage("Account created successfully! Please check your email to verify your account.")
+        // Don't automatically log in - user needs to verify email first
+        setTimeout(() => {
+          onSwitchToLogin()
+        }, 5000)
+      }
+    } catch (err) {
+      setMessage("An unexpected error occurred")
+    } finally {
       setIsLoading(false)
     }
   }
@@ -43,7 +76,7 @@ export default function LoginPage() {
             <ShieldCheck className="h-7 w-7 text-primary" />
           </div>
           <CardTitle className="text-2xl font-bold">Transaction Monitor</CardTitle>
-          <CardDescription className="text-base">Sign in to access the flagged transactions dashboard</CardDescription>
+          <CardDescription className="text-base">Create your account</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -71,24 +104,49 @@ export default function LoginPage() {
                 className="h-11"
               />
             </div>
-            {error && (
-              <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="space-y-2">
+              <Label htmlFor="confirmPassword">Confirm Password</Label>
+              <Input
+                id="confirmPassword"
+                type="password"
+                placeholder="Enter your password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                disabled={isLoading}
+                className="h-11"
+              />
+            </div>
+            {message && (
+              <div className={`flex items-center gap-2 rounded-lg p-3 text-sm ${
+                message.includes("successfully") 
+                  ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300" 
+                  : "bg-destructive/10 text-destructive"
+              }`}>
                 <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>{error}</span>
+                <span>{message}</span>
               </div>
             )}
+
             <Button type="submit" className="h-11 w-full text-base font-semibold" disabled={isLoading}>
               {isLoading ? (
                 <>
                   <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
-                  Signing in...
+                  Creating account...
                 </>
               ) : (
-                "Sign In"
+                "Sign Up"
               )}
             </Button>
           </form>
-          <p className="mt-6 text-center text-xs text-muted-foreground">Demo: Use any email and password to sign in</p>
+          <div className="mt-4 text-center text-sm text-slate-600">
+            <span>Already have an account? </span>
+            <button 
+              onClick={onSwitchToLogin}
+              className="text-accent hover:text-accent/90 font-medium"
+            >
+              Sign in
+            </button>
+          </div>
         </CardContent>
       </Card>
     </div>
