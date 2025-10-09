@@ -25,6 +25,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# data files
 backend_ML/HI-Medium_Trans.csv
 backend_ML/HI-Medium_accounts.csv
 *.csv
