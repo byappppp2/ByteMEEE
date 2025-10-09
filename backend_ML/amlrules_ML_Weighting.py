@@ -70,7 +70,7 @@ if __name__ == "__main__":
 # =========================================================
 # CONFIG
 # =========================================================
-CSV_PATH = "HI-Small_Trans.csv"
+CSV_PATH = "../HI-Small_Trans.csv"
 FLAGGED_PATH = "flagged_transactions.csv"
 DF_PATH = "transactions_scored.csv"
 
@@ -240,7 +240,7 @@ def main(FILE):
         if k in raw.columns:
             raw = raw.rename(columns={k: v})
 
-    df = raw.sample(n=12000) # no extra copy
+    df = raw # no extra copy
 
     # Ensure key columns exist
     needed_cols = [
@@ -681,6 +681,41 @@ def main(FILE):
     safe_preview(flagged, n=10, name="Flagged (Elevated/High)")
 
     print(f"\n⏱ Total runtime: {round(time.time()-t0, 2)}s")
+    # ===== Derived summary metrics to return =====
+    scanVolume = int(len(df))
+    flaggedRecords = int(len(flagged))
+    proportionFlagged = float(flaggedRecords / scanVolume) if scanVolume else 0.0
+
+    # Top 3 violations based on model feature importance (fallback to counts if missing)
+    try:
+        # rf_importance defined above
+        topViolations = [k for k, _ in sorted(rf_importance.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+    except Exception:
+        # Fallback: most frequent rule flags among flagged set
+        candidate_flags = [
+            "flag_high_value", "flag_very_high_value", "flag_suspicious_amount",
+            "flag_cross_bank", "flag_same_account", "flag_odd_hours", "flag_weekend",
+            "flag_cross_currency", "flag_round_amount", "flag_exact_threshold",
+            "flag_micro_amount", "flag_cash_equivalent",
+            "flag_structuring", "flag_velocity_outgoing", "flag_counterparty_diversity",
+            "flag_rapid_transactions"
+        ]
+        present = [c for c in candidate_flags if c in flagged.columns]
+        counts = {c: int(flagged[c].sum()) for c in present}
+        topViolations = [k for k, _ in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+
+    # Print a single JSON line for easy parsing by Node/Next
+    try:
+        print("\nJSON_SUMMARY:\n" + json.dumps({
+            "scanVolume": scanVolume,
+            "flaggedRecords": flaggedRecords,
+            "proportionFlagged": proportionFlagged,
+            "topViolations": topViolations,
+        }))
+    except Exception:
+        pass
+
+    return scanVolume, flaggedRecords, proportionFlagged, topViolations
 
 
 if __name__ == "__main__":
