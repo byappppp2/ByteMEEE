@@ -6,6 +6,7 @@ import { TransactionsDashboard } from "@/components/transactions-dashboard"
 import supabase from "@/lib/supabaseClient"
 import LoginForm from "@/app/login/login-form"
 import SignupForm from "@/app/login/signup-form"
+import UploadPage from "@/app/upload/page"
 
 export default function HomePage() {
   const router = useRouter()
@@ -13,6 +14,7 @@ export default function HomePage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [authView, setAuthView] = useState<"login" | "signup">("login")
+const [uploadCompleted, setUploadCompleted] = useState(false)
 
   useEffect(() => {
     // Check if user is authenticated
@@ -21,6 +23,10 @@ export default function HomePage() {
       if (session?.user) {
         setUser(session.user)
         setIsAuthenticated(true)
+        const uploaded = localStorage.getItem("transactions")
+        if (uploaded){
+          setUploadCompleted(true)
+        }
       }
       setIsLoading(false)
     }
@@ -41,6 +47,8 @@ export default function HomePage() {
     await supabase.auth.signOut()
     setUser(null)
     setIsAuthenticated(false)
+    setUploadCompleted(false)
+    localStorage.removeItem("transactions")
   }
 
     useEffect(() => {
@@ -63,6 +71,7 @@ export default function HomePage() {
       } else if (event === 'SIGNED_OUT') {
         setUser(null)
         setIsAuthenticated(false)
+        setUploadCompleted(false)
       }
     })
 
@@ -87,9 +96,16 @@ export default function HomePage() {
     )
   }
 
-  if (!isAuthenticated) {
-    return null
+  if (isAuthenticated && !uploadCompleted) {
+    return <UploadPage />
   }
 
-  return <TransactionsDashboard onLogout={handleLogout} />
+  // 3️⃣ If logged in and upload done → dashboard
+  if (isAuthenticated && uploadCompleted) {
+    console.log("hello")
+    return <TransactionsDashboard onLogout={handleLogout} />
+  }
+ return null
+
+  // return <TransactionsDashboard onLogout={handleLogout} />
 }

@@ -12,18 +12,21 @@ export default function DashboardPage() {
   useEffect(() => {
     // Check if user is authenticated
     const authStatus = localStorage.getItem("isAuthenticated")
-    if (authStatus === "true") {
-      setIsAuthenticated(true)
-    } else {
-      router.push("/login")
-    }
-    setIsLoading(false)
+    const uploaded = localStorage.getItem("transactions")
+  if (authStatus !== "true") {
+    router.push("/login")
+  } else if (!uploaded) {
+    router.push("/upload")
+  } else {
+    setIsAuthenticated(true)
+  }
+
+  setIsLoading(false)
   }, [router])
 
   const handleLogout = () => {
     localStorage.removeItem("isAuthenticated")
     localStorage.removeItem("transactions")
-    router.push("/login")
   }
 
   if (isLoading) {

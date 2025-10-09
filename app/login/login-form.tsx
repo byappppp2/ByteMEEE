@@ -23,6 +23,7 @@ export default function LoginForm({ onLogin, onSwitchToSignup }: LoginFormProps)
   const [message, setMessage] = useState("")
   const [error, setError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -43,10 +44,11 @@ export default function LoginForm({ onLogin, onSwitchToSignup }: LoginFormProps)
       }
 
       if (data?.user) {
-        onLogin(data.user)
-        router.push("/upload")
-        return
-      }
+  onLogin(data.user)
+  localStorage.setItem("isAuthenticated", "true") // ✅ store auth state
+  router.push("/upload")
+  return
+}
     } catch (err) {
       setError("An unexpected error occurred")
     } finally {
