@@ -16,33 +16,41 @@ warnings.filterwarnings("ignore", category=UserWarning)
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import requests
+import json
+from datetime import datetime, timedelta
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report, precision_recall_curve, roc_curve
-from testing import load_new_dataset
+from sklearn.ensemble import RandomForestClassifier, IsolationForest
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report, precision_recall_curve, roc_curve, roc_auc_score
 
 
 # =========================================================
 # CONFIG
 # =========================================================
-CSV_PATH = "HI-Medium_Trans.csv"
+CSV_PATH = "../HI-Small_Trans2.csv"
 FLAGGED_PATH = "flagged_transactions.csv"
 DF_PATH = "transactions_scored.csv"
 
-# Amount thresholds
-HIGH_VALUE = 20_000
+# Amount thresholds (refined)
+HIGH_VALUE = 15_000                        # Lowered for better sensitivity
+VERY_HIGH_VALUE = 50_000                   # New threshold for critical transactions
+SUSPICIOUS_AMOUNT = 9_500                  # Just under reporting threshold
 
-# Time windows
-ODD_HOUR_START, ODD_HOUR_END = 0, 4        # inclusive (00:00–04:59)
+# Time windows (refined)
+ODD_HOUR_START, ODD_HOUR_END = 0, 5        # Extended odd hours (00:00–05:59)
+WEEKEND_HOURS = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]  # Weekend analysis
 STRUCT_WINDOW_HOURS = 24                   # window for structuring per (from->to)
 VELOCITY_WINDOW_HOURS = 24                 # outgoing velocity per originating account
 DIVERSITY_WINDOW_DAYS = 1                  # distinct counterparties per day
 
-# Counts / thresholds
-STRUCT_MIN_COUNT = 5                       # >= N small txns in window to same counterparty
-VELOCITY_MIN_COUNT = 20                    # >= N outgoing txns in window from same account
-COUNTERPARTY_DIVERSITY_MIN = 10            # >= N distinct counterparties per day
+# Counts / thresholds (refined)
+STRUCT_MIN_COUNT = 3                       # Lowered for better detection
+VELOCITY_MIN_COUNT = 15                    # Lowered threshold
+COUNTERPARTY_DIVERSITY_MIN = 8             # Lowered threshold
+RAPID_TRANSACTION_COUNT = 5                # New: rapid transactions in short time
 
 # Plot toggle (optional)
 MAKE_PLOT = True
@@ -61,6 +69,91 @@ def safe_preview(df: pd.DataFrame, n=5, name="DataFrame"):
         print(df.head(n).to_string(index=False))
 
 
+def normalize_currencies_to_usd(df: pd.DataFrame) -> pd.DataFrame:
+   
+    fallback_rates = {
+        'EUR': 1.08, 'GBP': 1.27, 'JPY': 0.0067, 'CAD': 0.74,
+        'AUD': 0.66, 'CHF': 1.12, 'CNY': 0.14, 'INR': 0.012,
+        'BRL': 0.20, 'MXN': 0.059, 'KRW': 0.00076, 'SGD': 0.74,
+        'HKD': 0.13, 'NZD': 0.61, 'SEK': 0.095, 'NOK': 0.095,
+        'DKK': 0.14, 'PLN': 0.25, 'CZK': 0.044, 'HUF': 0.0028,
+        'RUB': 0.011, 'TRY': 0.034, 'ZAR': 0.055, 'THB': 0.028,
+        'MYR': 0.21, 'IDR': 0.000064, 'PHP': 0.018, 'VND': 0.000041
+    }
+    
+    def get_exchange_rate(currency: str) -> float:
+        currency = currency.upper().strip()
+        if currency == 'USD':
+            return 1.0
+
+        try:
+            url = "https://api.exchangerate-api.com/v4/latest/USD"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if currency in data.get('rates', {}):
+                    return 1.0 / data['rates'][currency]
+        except:
+            pass
+        
+        return fallback_rates.get(currency, 1.0)
+    
+    df = df.copy()
+    
+    # Normalize amount_paid
+    if 'amount_paid' in df.columns and 'payment_currency' in df.columns:
+        unique_currencies = df['payment_currency'].dropna().unique()
+        exchange_rates = {curr: get_exchange_rate(str(curr)) for curr in unique_currencies}
+        
+        def convert_paid_to_usd(row):
+            amount = row['amount_paid']
+            currency = row['payment_currency']
+            if pd.isna(amount) or pd.isna(currency):
+                return np.nan
+            rate = exchange_rates.get(str(currency).upper(), 1.0)
+            return float(amount) * rate
+        
+        df['amount_paid_usd'] = df.apply(convert_paid_to_usd, axis=1)
+        print(f"✅ Converted {len(unique_currencies)} currencies for amount_paid")
+    
+    # Normalize amount_received
+    if 'amount_received' in df.columns and 'receiving_currency' in df.columns:
+        unique_currencies = df['receiving_currency'].dropna().unique()
+        exchange_rates = {curr: get_exchange_rate(str(curr)) for curr in unique_currencies}
+        
+        def convert_received_to_usd(row):
+            amount = row['amount_received']
+            currency = row['receiving_currency']
+            if pd.isna(amount) or pd.isna(currency):
+                return np.nan
+            rate = exchange_rates.get(str(currency).upper(), 1.0)
+            return float(amount) * rate
+        
+        df['amount_received_usd'] = df.apply(convert_received_to_usd, axis=1)
+        print(f"✅ Converted {len(unique_currencies)} currencies for amount_received")
+    
+    return df
+
+
+def validate_file_security(file_path: str) -> bool:
+    print(f"🔍 Validating file: {file_path}")
+    
+    if not os.path.exists(file_path):
+        print(f"❌ File not found: {file_path}")
+        return False
+    
+    # Check file extension
+    allowed_extensions = {'.csv', '.xlsx', '.xls', '.json'}
+    file_ext = os.path.splitext(file_path)[1].lower()
+    if file_ext not in allowed_extensions:
+        print(f"❌ Invalid file type: {file_ext}")
+        return False
+    
+    file_size = os.path.getsize(file_path)
+    print(f"✅ File validation passed ({file_size / 1024:.1f}KB)")
+    return True
+
+
 def main():
     t0 = time.time()
 
@@ -69,8 +162,10 @@ def main():
     # -------------------------
     step("STEP 1: Load & normalize columns")
 
-    if not os.path.exists(CSV_PATH):
-        print(f"ERROR: CSV file not found at path: {CSV_PATH}", file=sys.stderr)
+
+    # Validate file security
+    if not validate_file_security(CSV_PATH):
+        print(f"ERROR: File validation failed for: {CSV_PATH}", file=sys.stderr)
         sys.exit(1)
 
     raw = pd.read_csv(CSV_PATH)
@@ -128,8 +223,22 @@ def main():
         if c in df.columns:
             df[c] = df[c].astype("category")
 
-    # Choose canonical amount column
-    amount_col = "amount_paid" if df["amount_paid"].notna().any() else "amount_received"
+    # -------------------------
+    # 1.5) CURRENCY NORMALIZATION
+    # -------------------------
+    step("STEP 1.5: Currency normalization to USD")
+    df = normalize_currencies_to_usd(df)
+
+    # Choose canonical amount column (prefer USD normalized)
+    if "amount_paid_usd" in df.columns:
+        amount_col = "amount_paid_usd"
+    elif "amount_paid" in df.columns:
+        amount_col = "amount_paid"
+    elif "amount_received_usd" in df.columns:
+        amount_col = "amount_received_usd"
+    else:
+        amount_col = "amount_received"
+    
     amt = df[amount_col].fillna(0.0).astype("float32")
 
     print("Shape:", df.shape)
@@ -137,17 +246,26 @@ def main():
     safe_preview(df, name="Raw (normalized)")
 
     # -------------------------
-    # 2) SIMPLE FLAGS (O(N), vectorized)
+    # 2) ENHANCED AML FLAGS (O(N), vectorized)
     # -------------------------
-    step("STEP 2: Rule-based flags (vectorized)")
+    step("STEP 2: Enhanced AML flags (vectorized)")
 
-    df["flag_high_value"]   = (amt > HIGH_VALUE)
-    df["flag_cross_bank"]   = (df["from_bank"].astype(str).values != df["to_bank"].astype(str).values)
+    # Basic amount flags (refined)
+    df["flag_high_value"] = (amt > HIGH_VALUE)
+    df["flag_very_high_value"] = (amt > VERY_HIGH_VALUE)
+    df["flag_suspicious_amount"] = (amt > SUSPICIOUS_AMOUNT) & (amt <= HIGH_VALUE)
+    
+    # Bank and account flags
+    df["flag_cross_bank"] = (df["from_bank"].astype(str).values != df["to_bank"].astype(str).values)
     df["flag_same_account"] = (df["from_account"].astype(str).values == df["to_account"].astype(str).values)
-
+    
+    # Enhanced time-based flags
     df["hour"] = df["timestamp"].dt.hour
+    df["day_of_week"] = df["timestamp"].dt.dayofweek
     df["flag_odd_hours"] = df["hour"].between(ODD_HOUR_START, ODD_HOUR_END, inclusive="both")
-
+    df["flag_weekend"] = df["day_of_week"].isin([5, 6])  # Saturday, Sunday
+    
+    # Currency flags
     if {"payment_currency","receiving_currency"}.issubset(df.columns):
         df["flag_cross_currency"] = (
             df["payment_currency"].astype(str).str.upper().values
@@ -156,9 +274,18 @@ def main():
     else:
         df["flag_cross_currency"] = False
 
-    # Round-amount heuristic (suspiciously tidy amounts, tune as needed)
-    # e.g., multiples of 1000, or ending with .00
+    # Enhanced amount patterns
     df["flag_round_amount"] = (np.isclose((amt % 1000), 0) | np.isclose((amt * 100) % 100, 0)).astype(bool)
+    df["flag_exact_threshold"] = np.isclose(amt, HIGH_VALUE, rtol=0.01)  # Just under reporting threshold
+    df["flag_micro_amount"] = (amt > 0) & (amt < 100)  # Micro transactions
+    
+    # Payment format flags
+    if "payment_format" in df.columns:
+        df["flag_cash_equivalent"] = df["payment_format"].astype(str).str.contains(
+            "cash|prepaid|gift", case=False, na=False
+        )
+    else:
+        df["flag_cash_equivalent"] = False
 
     # -------------------------
     # 3) TIME-WINDOW PATTERNS via downsampling (fast & scalable)
@@ -249,129 +376,258 @@ def main():
         df["flag_counterparty_diversity"] = df["div_hit"].fillna(False).values
         df.drop(columns=["div_hit"], inplace=True)
 
-    # -------------------------
-    # 4) SCORING & SEVERITY
-    # -------------------------
-    step("STEP 4: Final scoring & severity")
+        # --- 3d) Rapid transactions: many transactions in short time window
+        rapid_window_minutes = 30  # 30-minute window for rapid transactions
+        df["ts_minute"] = df["timestamp"].dt.floor(f"{rapid_window_minutes}min")
+        
+        rapid_counts = (
+            df.dropna(subset=["ts_minute"])
+              .groupby(["from_account", "ts_minute"], sort=True)
+              .size().rename("rapid_cnt").reset_index()
+        )
+        rapid_counts["rapid_hit"] = rapid_counts["rapid_cnt"] >= RAPID_TRANSACTION_COUNT
+        
+        df = df.merge(
+            rapid_counts[["from_account", "ts_minute", "rapid_hit"]],
+            on=["from_account", "ts_minute"],
+            how="left"
+        )
+        df["flag_rapid_transactions"] = df["rapid_hit"].fillna(False).values
+        df.drop(columns=["rapid_hit"], inplace=True)
 
-    # Choose which flags to score (tune weights per policy)
+    # -------------------------
+    # 4) ENHANCED ML SCORING & SEVERITY
+    # -------------------------
+    step("STEP 4: Enhanced ML scoring & severity")
+
+    # Choose which flags to score (enhanced feature set)
     rule_cols = [
-        "flag_high_value","flag_cross_bank","flag_same_account",
-        "flag_odd_hours","flag_cross_currency","flag_round_amount",
-        "flag_structuring","flag_velocity_outgoing","flag_counterparty_diversity"
+        "flag_high_value", "flag_very_high_value", "flag_suspicious_amount",
+        "flag_cross_bank", "flag_same_account", "flag_odd_hours", "flag_weekend",
+        "flag_cross_currency", "flag_round_amount", "flag_exact_threshold",
+        "flag_micro_amount", "flag_cash_equivalent",
+        "flag_structuring", "flag_velocity_outgoing", "flag_counterparty_diversity",
+        "flag_rapid_transactions"
     ]
 
-    #variables for logistic regression
+    # Prepare features for ML models
     X = df[rule_cols].fillna(0).astype(int)
     Y = y
 
+    print(f"Training {len(rule_cols)} rule-based features on {len(X)} transactions")
 
-    # Train on full dataset to get final weights
-    final_model = LogisticRegression(max_iter=1000)
-    final_model.fit(X, Y)
-
-    auto_weights = {f: round(w, 3) for f, w in zip(rule_cols, final_model.coef_[0])}
-    print("ML-derived weights for each flag:")
-    for flag, weight in auto_weights.items():
-        print(f"{flag}: {weight}")
-
-
-    #getting thresholds for fraud detection..
-    y_true = y
-    y_scores = final_model.predict_proba(X)[:,1]
-
-    precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
-    # Pick threshold where recall >= 0.8 (catch 80% of suspicious transactions)
-    threshold = thresholds[(recall >= 0.8).argmax()]
-
-    print(threshold)
+    # 1) Enhanced Logistic Regression
+    lr_model = LogisticRegression(
+        max_iter=2000, 
+        random_state=42, 
+        class_weight='balanced',  # Handle class imbalance
+        C=0.1  # Regularization
+    )
+    lr_model.fit(X, Y)
+    lr_weights = {f: round(w, 3) for f, w in zip(rule_cols, lr_model.coef_[0])}
+    print("Logistic Regression weights:")
+    for flag, weight in lr_weights.items():
+        print(f"  {flag}: {weight}")
     
+    lr_proba = lr_model.predict_proba(X)[:, 1]
 
+    # 2) Enhanced Random Forest
+    print("\nTraining Random Forest...")
+    rf_model = RandomForestClassifier(
+        n_estimators=200, 
+        random_state=42, 
+        n_jobs=-1,
+        class_weight='balanced',
+        max_depth=10,
+        min_samples_split=5,
+        min_samples_leaf=2
+    )
+    rf_model.fit(X, Y)
+    rf_proba = rf_model.predict_proba(X)[:, 1]
+    rf_importance = {f: round(w, 3) for f, w in zip(rule_cols, rf_model.feature_importances_)}
+    print("Random Forest feature importance:")
+    for flag, importance in rf_importance.items():
+        print(f"  {flag}: {importance}")
 
+    # 3) Enhanced Isolation Forest
+    print("\nTraining Isolation Forest...")
+    contamination_rate = max(0.005, min(0.1, Y.mean())) if Y.nunique() > 1 else 0.05
+    if_model = IsolationForest(
+        contamination=contamination_rate, 
+        random_state=42, 
+        n_jobs=-1,
+        n_estimators=200,
+        max_samples=0.8
+    )
+    if_model.fit(X)
+    if_scores = if_model.score_samples(X)
+    if_proba = 1 / (1 + np.exp(if_scores))  # Convert to probability-like scores
 
-    #test the newmodel
-    filepath = "LI-Small_Trans.csv"
-    results = load_new_dataset(filepath)
-    new_X = results[0]
-    laundering_count = results[1]
-    num_rows = results[2]
-    df = results[3]
+    # Conservative ensemble weighting to reduce false positives
+    # Weight supervised models more heavily for better precision
+    ensemble_weights = [0.4, 0.4, 0.2]  # LR, RF, IF (supervised models get higher weight)
+    df["risk_prob"] = (ensemble_weights[0] * lr_proba + 
+                      ensemble_weights[1] * rf_proba +
+                      ensemble_weights[2] * if_proba)
 
+    # Store individual model scores
+    df["lr_risk_score"] = lr_proba
+    df["rf_risk_score"] = rf_proba
+    df["if_anomaly_score"] = -if_scores  # Higher scores = more anomalous
+
+    # Conservative severity classification targeting ~0.5% flagging rate
+    def assign_severity(score):
+        if score >= 0.95:
+            return 'Critical'
+        elif score >= 0.85:
+            return 'High'
+        elif score >= 0.75:
+            return 'Medium'
+        elif score >= 0.65:
+            return 'Elevated'
+        else:
+            return 'Low'
+
+    # Apply severity classification
+    df["severity"] = df["risk_prob"].apply(assign_severity)
     
-    print(laundering_count, num_rows)
+    # Conservative risk factors for severity adjustment
+    df["risk_multiplier"] = 1.0
     
-
-    df["risk_prob"] = final_model.predict_proba(new_X)[:, 1]  # probability of laundering
-    df['ml_flag'] = df['risk_prob'] >= threshold    #checking with threshold of sample set
-
-    # Step 3: Positive-weight feature flag
-    # Get coefficients from logistic regression
-    coefficients = final_model.coef_[0]  # array of length = number of features
-    positive_features = [f for f, w in zip(rule_cols, coefficients) if w > 0]
-
-    # Flag transactions where any positive-weight feature is "on"
-    df['weight_flag'] = df[positive_features].any(axis=1)
-
-    # Step 4: Combine flags
-    df['suspicious'] = df['ml_flag'] | df['weight_flag']
-
-    #check results
-    print(df[['ml_flag', 'weight_flag']].sum())
-    print(df[['suspicious', 'is_laundering']].value_counts())
-    print(df["risk_prob"].describe())
-
-
-
-    coef = np.array(list(auto_weights.values()))
-
-    # Best and worst input patterns
-    x_best = np.array([1 if w < 0 else 0 for w in coef]).reshape(1, -1)   # safest combination
-    x_worst = np.array([1 if w > 0 else 0 for w in coef]).reshape(1, -1)  # riskiest combination
-
-    # Predict corresponding laundering probabilities
-    p_best = final_model.predict_proba(x_best)[0][1]
-    p_worst = final_model.predict_proba(x_worst)[0][1]
-
-    #build the bins
-    bins = np.linspace(p_best, p_worst, 5)  # creates 5 edges → 4 intervals
-    labels = ["Low", "Medium", "Elevated", "High"]
-
-    df["severity"] = pd.cut(df["risk_prob"], bins=bins, labels=labels, include_lowest=True)
+    # Increase risk for transactions with multiple flags (reduced impact)
+    flag_count = df[rule_cols].sum(axis=1)
+    df["risk_multiplier"] += flag_count * 0.02  # 2% increase per flag (reduced from 5%)
+    
+    # Increase risk for very high value transactions (reduced impact)
+    df.loc[df["flag_very_high_value"], "risk_multiplier"] *= 1.2  # Reduced from 1.5
+    
+    # Increase risk for weekend transactions (reduced impact)
+    df.loc[df["flag_weekend"], "risk_multiplier"] *= 1.1  # Reduced from 1.2
+    
+    # Apply risk multiplier to final score
+    df["risk_prob_adjusted"] = df["risk_prob"] * df["risk_multiplier"]
+    df["risk_prob_adjusted"] = np.clip(df["risk_prob_adjusted"], 0, 1)  # Keep in [0,1] range
+    
+    # Re-assign severity with adjusted scores
+    df["severity"] = df["risk_prob_adjusted"].apply(assign_severity)
+    
+    # Additional percentile-based flagging to target ~0.5% flagging rate
+    # Only flag top 0.5% of risk scores
+    risk_threshold_95th = df["risk_prob_adjusted"].quantile(0.995)  # Top 0.5%
+    risk_threshold_99th = df["risk_prob_adjusted"].quantile(0.999)  # Top 0.1%
+    
+    print(f"\nRisk Score Thresholds:")
+    print(f"  95th percentile (0.5% flagging): {risk_threshold_95th:.4f}")
+    print(f"  99th percentile (0.1% flagging): {risk_threshold_99th:.4f}")
+    
+    # Apply percentile-based severity override
+    def assign_severity_percentile(score):
+        if score >= risk_threshold_99th:
+            return 'Critical'
+        elif score >= risk_threshold_95th:
+            return 'High'
+        else:
+            return 'Low'
+    
+    # Override severity for top percentiles
+    df.loc[df["risk_prob_adjusted"] >= risk_threshold_99th, "severity"] = 'Critical'
+    df.loc[(df["risk_prob_adjusted"] >= risk_threshold_95th) & 
+           (df["risk_prob_adjusted"] < risk_threshold_99th), "severity"] = 'High'
+    df.loc[df["risk_prob_adjusted"] < risk_threshold_95th, "severity"] = 'Low'
 
     print(df["severity"].value_counts(normalize=True))
 
 
-    step("STEP 5: Save outputs & quick chart")
+    step("STEP 5: Save outputs & enhanced visualization")
 
     summary = (df["severity"].value_counts(dropna=False)
                .rename_axis("Severity")
                .reset_index(name="Count")
                .sort_values("Severity", key=lambda s: s.astype(str)))
 
-    print("\nSeverity summary:")
-    print(summary.to_string(index=False))
+    print("\nRisk Distribution Summary:")
+    total_transactions = len(df)
+    for _, row in summary.iterrows():
+        severity = row["Severity"]
+        count = row["Count"]
+        percentage = (count / total_transactions) * 100
+        print(f"  {severity:>10}: {count:>8,} transactions ({percentage:5.1f}%)")
+
+    print(f"\nRisk Score Statistics:")
+    print(f"  Average risk score: {df['risk_prob'].mean():.4f}")
+    print(f"  Maximum risk score: {df['risk_prob'].max():.4f}")
+    print(f"  Minimum risk score: {df['risk_prob'].min():.4f}")
 
     if MAKE_PLOT:
         try:
-            plt.figure(figsize=(6, 4))
-            plt.bar(summary["Severity"].astype(str), summary["Count"])
-            plt.title("Transaction Risk Level Distribution")
+            # Create enhanced risk distribution chart
+            plt.figure(figsize=(12, 8))
+            
+            # Main risk distribution chart
+            plt.subplot(2, 2, 1)
+            colors = ['#2E8B57', '#FFD700', '#FF6347', '#FF4500', '#DC143C']  # Green to Red
+            bars = plt.bar(summary["Severity"].astype(str), summary["Count"], color=colors)
+            plt.title("Transaction Risk Level Distribution", fontsize=14, fontweight='bold')
             plt.xlabel("Severity")
             plt.ylabel("Count")
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                plt.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                        f'{int(height):,}', ha='center', va='bottom', fontsize=9)
+            
+            # Risk score distribution
+            plt.subplot(2, 2, 2)
+            plt.hist(df['risk_prob'], bins=50, alpha=0.7, color='skyblue', edgecolor='black')
+            plt.title("Risk Score Distribution", fontsize=14, fontweight='bold')
+            plt.xlabel("Risk Score")
+            plt.ylabel("Frequency")
+            
+            # Model comparison
+            plt.subplot(2, 2, 3)
+            model_scores = [df['lr_risk_score'].mean(), df['rf_risk_score'].mean(), df['if_anomaly_score'].mean()]
+            model_names = ['Logistic\nRegression', 'Random\nForest', 'Isolation\nForest']
+            plt.bar(model_names, model_scores, color=['lightblue', 'lightgreen', 'lightcoral'])
+            plt.title("Average Scores by Model", fontsize=14, fontweight='bold')
+            plt.ylabel("Average Score")
+            
+            # Add value labels on bars
+            for i, (bar, score) in enumerate(zip(plt.gca().patches, model_scores)):
+                plt.text(bar.get_x() + bar.get_width()/2., bar.get_height() + bar.get_height()*0.01,
+                        f'{score:.3f}', ha='center', va='bottom', fontsize=9)
+            
+            # Top risky transactions
+            plt.subplot(2, 2, 4)
+            top_risky = df.nlargest(10, 'risk_prob')
+            plt.scatter(range(len(top_risky)), top_risky['risk_prob'], 
+                       c=top_risky['risk_prob'], cmap='Reds', s=50)
+            plt.title("Top 10 Riskiest Transactions", fontsize=14, fontweight='bold')
+            plt.xlabel("Transaction Rank")
+            plt.ylabel("Risk Score")
+            plt.colorbar(label='Risk Score')
+            
             plt.tight_layout()
+            plt.savefig('aml_risk_analysis.png', dpi=300, bbox_inches='tight')
+            print("✅ Enhanced visualization saved as: aml_risk_analysis.png")
             plt.show()
+            
         except Exception as e:
             print(f"(Plotting skipped: {e})")
 
-    # Save full + flagged
-    flagged = df[df["severity"].isin(["Elevated","High"])].copy()
+    # Save full + flagged (only Critical and High risk for precision)
+    flagged = df[df["severity"].isin(["Critical","High"])].copy()
     cols_to_show = [
         "timestamp","from_bank","from_account","to_bank","to_account",
         amount_col,"payment_currency","payment_format",
-        "flag_high_value","flag_cross_bank","flag_same_account",
-        "flag_odd_hours","flag_cross_currency","flag_round_amount",
+        "flag_high_value","flag_very_high_value","flag_suspicious_amount",
+        "flag_cross_bank","flag_same_account","flag_odd_hours","flag_weekend",
+        "flag_cross_currency","flag_round_amount","flag_exact_threshold",
+        "flag_micro_amount","flag_cash_equivalent",
         "flag_structuring","flag_velocity_outgoing","flag_counterparty_diversity",
-        "final_score","severity"
+        "flag_rapid_transactions",
+        "risk_prob","risk_prob_adjusted","risk_multiplier",
+        "lr_risk_score","rf_risk_score","if_anomaly_score","severity"
     ]
     flagged = flagged[[c for c in cols_to_show if c in flagged.columns]]
 
