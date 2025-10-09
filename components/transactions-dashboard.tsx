@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -112,12 +112,24 @@ const flagTypeColors = {
 } as const
 
 export function TransactionsDashboard({ onLogout }: { onLogout: () => void }) {
+  const [transactions, setTransactions] = useState<Transaction[]>(mockTransactions)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [complianceReport, setComplianceReport] = useState<string | null>(null)
   const [isGeneratingReport, setIsGeneratingReport] = useState(false)
 
+  useEffect(() => {
+    const storedTransactions = localStorage.getItem("transactions")
+    if (storedTransactions) {
+      try {
+        const parsed = JSON.parse(storedTransactions)
+        setTransactions(parsed)
+      } catch (error) {
+        console.error("Error parsing stored transactions:", error)
+      }
+    }
+  }, [])
   const filteredTransactions = mockTransactions.filter(
     (transaction) =>
       transaction.fromBank.toLowerCase().includes(searchQuery.toLowerCase()) ||
