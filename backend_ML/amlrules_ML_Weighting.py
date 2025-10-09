@@ -32,7 +32,6 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 # =========================================================
 CSV_PATH = "../HI-Small_Trans2.csv"
 FLAGGED_PATH = "flagged_transactions.csv"
-DF_PATH = "transactions_scored.csv"
 
 # Amount thresholds (refined)
 HIGH_VALUE = 15_000                        # Lowered for better sensitivity
@@ -170,8 +169,6 @@ def main():
 
     raw = pd.read_csv(CSV_PATH)
 
-    y = raw["Is Laundering"].astype(int) #for checking later
-
 
     raw.columns = [c.strip() for c in raw.columns]
 
@@ -199,7 +196,14 @@ def main():
         if k in raw.columns:
             raw = raw.rename(columns={k: v})
 
-    df = raw.sample(n=12000) # no extra copy
+    df = raw # no extra copy
+    # Align target to the working dataframe to avoid X/y length mismatches
+    if "is_laundering" in df.columns:
+        y = df["is_laundering"].astype(int)
+    elif "Is Laundering" in df.columns:
+        y = df["Is Laundering"].astype(int)
+    else:
+        y = pd.Series(np.zeros(len(df), dtype=int), index=df.index)
 
     # Ensure key columns exist
     needed_cols = [
@@ -520,6 +524,27 @@ def main():
     print(f"  95th percentile (0.5% flagging): {risk_threshold_95th:.4f}")
     print(f"  99th percentile (0.1% flagging): {risk_threshold_99th:.4f}")
     
+    # -------------------------
+    # REPORT METRICS FOR FRONTEND / OPENAI SUMMARY
+    # -------------------------
+    total_records = int(len(df))
+    num_flagged_for_report = int((df["severity"].isin(["Critical","High"]).sum()))
+    
+    # Determine top-3 flags: must be positively associated across LR (coef>0) and RF (importance above median)
+    try:
+        lr_positive = {f for f, w in zip(rule_cols, lr_model.coef_[0]) if w > 0}
+        rf_importances_series = pd.Series(rf_model.feature_importances_, index=rule_cols)
+        rf_threshold = rf_importances_series.median()
+        rf_positive = set(rf_importances_series[rf_importances_series >= rf_threshold].index)
+        candidate_flags = list(lr_positive.intersection(rf_positive))
+        top_flags = []
+        if candidate_flags:
+            flagged_for_top = df[df["severity"].isin(["Critical","High"])][candidate_flags]
+            freq = flagged_for_top.sum().sort_values(ascending=False)
+            top_flags = list(freq.head(3).index)
+    except Exception:
+        top_flags = []
+    
     # Apply percentile-based severity override
     def assign_severity_percentile(score):
         if score >= risk_threshold_99th:
@@ -617,25 +642,23 @@ def main():
 
     # Save full + flagged (only Critical and High risk for precision)
     flagged = df[df["severity"].isin(["Critical","High"])].copy()
+
+    # Build a combined flags string per row (only flags that are True)
+    present_rule_cols = [c for c in rule_cols if c in flagged.columns]
+    def combine_flags(row):
+        active = [c for c in present_rule_cols if bool(row.get(c, False))]
+        return "|".join(active) if active else ""
+    flagged["flags"] = flagged.apply(combine_flags, axis=1)
+
     cols_to_show = [
         "timestamp","from_bank","from_account","to_bank","to_account",
-        amount_col,"payment_currency","payment_format",
-        "flag_high_value","flag_very_high_value","flag_suspicious_amount",
-        "flag_cross_bank","flag_same_account","flag_odd_hours","flag_weekend",
-        "flag_cross_currency","flag_round_amount","flag_exact_threshold",
-        "flag_micro_amount","flag_cash_equivalent",
-        "flag_structuring","flag_velocity_outgoing","flag_counterparty_diversity",
-        "flag_rapid_transactions",
-        "risk_prob","risk_prob_adjusted","risk_multiplier",
-        "lr_risk_score","rf_risk_score","if_anomaly_score","severity"
+        amount_col,"payment_currency","payment_format", "flags", "severity"
     ]
     flagged = flagged[[c for c in cols_to_show if c in flagged.columns]]
 
-    df.to_csv(DF_PATH, index=False)
     flagged.to_csv(FLAGGED_PATH, index=False)
 
     print(f"\n✅ Saved flagged rows to: {os.path.abspath(FLAGGED_PATH)}")
-    print(f"✅ Saved full scored dataset to: {os.path.abspath(DF_PATH)}")
 
     safe_preview(flagged, n=10, name="Flagged (Elevated/High)")
 
