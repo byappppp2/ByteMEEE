@@ -30,7 +30,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 # =========================================================
 # CONFIG
 # =========================================================
-CSV_PATH = "../HI-Small_Trans2.csv"
+CSV_PATH = "HI-Small_Trans.csv"
 FLAGGED_PATH = "flagged_transactions.csv"
 DF_PATH = "transactions_scored.csv"
 
