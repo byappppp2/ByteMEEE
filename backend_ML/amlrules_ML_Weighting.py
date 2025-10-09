@@ -199,7 +199,7 @@ def main():
         if k in raw.columns:
             raw = raw.rename(columns={k: v})
 
-    df = raw  # no extra copy
+    df = raw.sample(n=12000) # no extra copy
 
     # Ensure key columns exist
     needed_cols = [
