@@ -3,26 +3,80 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { TransactionsDashboard } from "@/components/transactions-dashboard"
+import supabase from "@/lib/supabaseClient"
+import LoginForm from "@/app/login/login-form"
+import SignupForm from "@/app/login/signup-form"
 
 export default function HomePage() {
   const router = useRouter()
+  const [user, setUser] = useState<any>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [authView, setAuthView] = useState<"login" | "signup">("login")
 
   useEffect(() => {
     // Check if user is authenticated
-    const authStatus = localStorage.getItem("isAuthenticated")
-    if (authStatus === "true") {
-      setIsAuthenticated(true)
-    } else {
-      router.push("/login")
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session?.user) {
+        setUser(session.user)
+        setIsAuthenticated(true)
+      }
+      setIsLoading(false)
     }
-    setIsLoading(false)
-  }, [router])
+    checkAuth()
+  }, [])
 
-  const handleLogout = () => {
-    localStorage.removeItem("isAuthenticated")
-    router.push("/login")
+  const handleLogin = (userData: any) => {
+    setUser(userData)
+    setIsAuthenticated(true)
+  }
+
+  const handleSignup = (userData: any) => {
+    setUser(userData)
+    setIsAuthenticated(true)
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setUser(null)
+    setIsAuthenticated(false)
+  }
+
+    useEffect(() => {
+    const init = async () => {
+      const { data } = await supabase.auth.getSession()
+      if (data.session?.user) {
+        setUser(data.session.user)
+      }
+    }
+    init()
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null)
+      setIsAuthenticated(!!session?.user)
+      
+      // Handle OAuth callback
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser(session.user)
+        setIsAuthenticated(true)
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null)
+        setIsAuthenticated(false)
+      }
+    })
+
+    return () => {
+      subscription.subscription?.unsubscribe()
+    }
+  }, [])
+
+  if (!user) {
+    if (authView === "login") {
+      return <LoginForm onLogin={handleLogin} onSwitchToSignup={() => setAuthView("signup")} />
+    } else {
+      return <SignupForm onSignup={handleSignup} onSwitchToLogin={() => setAuthView("login")} />
+    }
   }
 
   if (isLoading) {
